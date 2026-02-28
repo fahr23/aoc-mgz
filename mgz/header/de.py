@@ -45,6 +45,7 @@ player = Struct(
     "custom_ai"/Flag,
     If(lambda ctx: find_save_version(ctx) >= 25.06, "handicap"/Bytes(8)),
     If(lambda ctx: find_save_version(ctx) >= 64.3, "unknown_de_64_3" / Int32ul),
+    "unknown_string_67_2"/If(lambda ctx: find_save_version(ctx) >= 67.2, de_string),
 )
 
 string_block = Struct(
@@ -178,5 +179,6 @@ de = "de"/Struct(
     "ver37"/If(lambda ctx: find_save_version(ctx) >= 37, Struct(
         Int32ul,
         Int32ul
-    ))
+    )),
+    "end_67_2"/If(lambda ctx: find_save_version(ctx) >= 67.2, Bytes(8))
 )
