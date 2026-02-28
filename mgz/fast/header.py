@@ -560,6 +560,8 @@ def parse_de(data, version, save, skip=False):
             timestamp, x = unpack('<II', data)
         if save >= 67.2:
             data.read(8)
+            data.read(5)  # match Bytes(5) in de.py
+            data.read(1)  # match Byte in de.py
     rms_mod_id = None
     rms_filename = None
     for s in strings:
