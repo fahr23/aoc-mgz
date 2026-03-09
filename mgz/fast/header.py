@@ -43,9 +43,47 @@ def int_prefixed_string(data):
 
 def de_string(data):
     """Read DE string."""
-    assert data.read(2) == b'\x60\x0a'
-    length = unpack('<h', data)
-    return unpack(f'<{length}s', data)
+    import logging
+    pos = data.tell() if hasattr(data, 'tell') else 'N/A'
+    try:
+        # Log buffer position and next 16 bytes before reading
+        preview = data.read(16)
+        data.seek(-16, 1)
+        logging.warning(f"[de_string] BEFORE pos={pos} preview={preview.hex()}")
+        sig = data.read(2)
+        logging.warning(f"[de_string] pos={pos} sig={sig}")
+        if sig != b'\x60\x0a':
+            logging.error(f"DE string signature mismatch at pos={pos}: got {sig}")
+            # Log next 16 bytes for inspection
+            preview_err = data.read(16)
+            data.seek(-16, 1)
+            logging.error(f"[de_string] ERROR pos={pos} preview={preview_err.hex()}")
+            # Advance buffer by 2 bytes to avoid infinite loop
+            return b''
+        length = unpack('<h', data)
+        logging.warning(f"[de_string] pos={pos} length={length}")
+        if length == 0:
+            logging.warning(f"[de_string] pos={pos} zero-length string, advancing buffer")
+            # Still advance buffer by reading 0 bytes
+            return b''
+        try:
+            value = unpack(f'<{length}s', data)
+            logging.warning(f"[de_string] pos={pos} value={value}")
+            # Log buffer position and next 16 bytes after reading
+            after_pos = data.tell() if hasattr(data, 'tell') else 'N/A'
+            after_preview = data.read(16)
+            data.seek(-16, 1)
+            logging.warning(f"[de_string] AFTER pos={after_pos} preview={after_preview.hex()}")
+            return value
+        except Exception as e:
+            logging.error(f"[de_string] Exception reading value at pos={pos}: {e}")
+            # Advance buffer by length bytes even if unpack fails
+            data.read(length)
+            return b''
+    except Exception as e:
+        logging.error(f"[de_string] Exception at pos={pos}: {e}")
+        # Advance buffer by 2 bytes to avoid infinite loop
+        return b''
 
 
 def hd_string(data):
@@ -386,6 +424,25 @@ def string_block(data):
 
 
 def parse_de(data, version, save, skip=False):
+    import logging
+    logger = logging.getLogger(__name__)
+
+    def log_pos(label):
+        pos = data.tell() if hasattr(data, 'tell') else 'N/A'
+        try:
+            remaining = len(data.getbuffer()) - pos if hasattr(data, 'getbuffer') else 'N/A'
+        except TypeError:
+            remaining = 'N/A'
+        logger.debug(f"[mgz.fast.header] {label} | pos={pos} | remaining={remaining}")
+
+    def log_debug(msg):
+        pos = data.tell() if hasattr(data, 'tell') else 'N/A'
+        try:
+            remaining = len(data.getbuffer()) - pos if hasattr(data, 'getbuffer') else 'N/A'
+        except TypeError:
+            remaining = 'N/A'
+        logger.debug(f"[mgz.fast.header] {msg} | pos={pos} | remaining={remaining}")
+
     """Parse DE-specific header."""
     if version is not Version.DE:
         return None
@@ -551,17 +608,67 @@ def parse_de(data, version, save, skip=False):
         data.read(12)
         data.read(c * 4)
     if not skip:
+        log_pos("Before de_string (main)")
+        start_pos = data.tell() if hasattr(data, 'tell') else None
         de_string(data)
+        log_pos("After de_string (main)")
+        # Force buffer advancement to test if stuck
+        data.read(1)
+        log_pos("After forced data.read(1) after de_string (main)")
         if save >= 67.2:
-            _ = de_string(data)
-            _ = de_string(data)
-        data.read(8)
+            # Match construct parser: after de_string, read two de_string, then Bytes(5), Byte, and handle sub-13.17/13.17+ logic
+            log_pos("Construct-match: Before de_string #1 (new)")
+            result1 = de_string(data)
+            log_pos(f"Construct-match: After de_string #1 (new) | result={result1}")
+            log_pos("Construct-match: Before de_string #2 (new)")
+            result2 = de_string(data)
+            log_pos(f"Construct-match: After de_string #2 (new) | result={result2}")
+            log_pos("Construct-match: Before Bytes(5)")
+            data.read(5)
+            log_pos("Construct-match: After Bytes(5)")
+            log_pos("Construct-match: Before Byte")
+            data.read(1)
+            log_pos("Construct-match: After Byte")
+            if save < 13.17:
+                log_pos("Construct-match: Before de_string (sub <13.17)")
+                result_sub = de_string(data)
+                log_pos(f"Construct-match: After de_string (sub <13.17) | result={result_sub}")
+                log_pos("Construct-match: Before unpack('<I', data) (sub <13.17)")
+                unpack('<I', data)
+                log_pos("Construct-match: After unpack('<I', data) (sub <13.17)")
+                log_pos("Construct-match: Before data.read(4) (sub <13.17)")
+                data.read(4)
+                log_pos("Construct-match: After data.read(4) (sub <13.17)")
+            else:
+                log_pos("Construct-match: Before Bytes(2) (sub >=13.17)")
+                data.read(2)
+                log_pos("Construct-match: After Bytes(2) (sub >=13.17)")
+            if save >= 37:
+                log_pos("Construct-match: Before unpack('<II', data) (sub >=37)")
+                unpack('<II', data)
+                log_pos("Construct-match: After unpack('<II', data) (sub >=37)")
+        if save >= 13.13:
+            log_pos("Before data.read(1) (Byte)")
+            data.read(1)
+            log_pos("After data.read(1) (Byte)")
+        if save < 13.17:
+            log_pos("Before de_string (sub <13.17)")
+            result_sub = de_string(data)
+            log_pos(f"After de_string (sub <13.17) | result={result_sub}")
+            log_pos("Before unpack('<I', data) (sub <13.17)")
+            unpack('<I', data)
+            log_pos("After unpack('<I', data) (sub <13.17)")
+            log_pos("Before data.read(4) (sub <13.17)")
+            data.read(4)
+            log_pos("After data.read(4) (sub <13.17)")
+        else:
+            log_pos("Before data.read(2) (sub >=13.17)")
+            data.read(2)
+            log_pos("After data.read(2) (sub >=13.17)")
         if save >= 37:
-            timestamp, x = unpack('<II', data)
-        if save >= 67.2:
-            data.read(8)
-            data.read(5)  # match Bytes(5) in de.py
-            data.read(1)  # match Byte in de.py
+            log_pos("Before unpack('<II', data) (sub >=37)")
+            unpack('<II', data)
+            log_pos("After unpack('<II', data) (sub >=37)")
     rms_mod_id = None
     rms_filename = None
     for s in strings:
